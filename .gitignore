@@ -1,0 +1,17 @@
+.env
+.env.production
+.env.local
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.sqlite3
+*.egg-info/
+backend/data/
+backend/test-data/
+node_modules/
+dist/
+generated/
+.codegraph/
+*.log
+.DS_Store

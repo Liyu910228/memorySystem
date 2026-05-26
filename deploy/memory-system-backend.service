@@ -1,0 +1,15 @@
+[Unit]
+Description=Personal Memory AI backend
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/memory-system/backend
+EnvironmentFile=/opt/memory-system/backend/.env
+ExecStart=/opt/memory-system/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
