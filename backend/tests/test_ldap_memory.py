@@ -13,7 +13,6 @@ def test_dialogue_memory_isolated_by_ldap_id(client):
         json={
             "ldapId": "alice001",
             "question": "记住，我喜欢用中文回答和简洁摘要。",
-            "aiReply": "好的，我会记住你的回答偏好。",
         },
     )
     assert alice.status_code == 200
@@ -48,7 +47,6 @@ def test_dialogue_memory_writes_markdown_files(client):
         json={
             "ldapId": "md001",
             "question": "remember: I am in finance department and prefer direct conclusions.",
-            "aiReply": "OK, I will remember your profile and preference.",
         },
     )
     admin_token = token(client, "admin", "admin123")
@@ -68,7 +66,6 @@ def test_memory_layers_and_admin_crud(client):
         json={
             "ldapId": "alice001",
             "question": "我是销售部的李雷，今天临时要准备季度复盘。",
-            "aiReply": "我会在后续回答中结合你的身份和当前任务。",
         },
     )
     profile = client.get("/api/dialogue-memories/alice001?layer=profile")
@@ -90,6 +87,19 @@ def test_memory_layers_and_admin_crud(client):
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert deleted.status_code == 200
+
+
+def test_dialogue_memory_accepts_legacy_ai_reply_for_compatibility(client):
+    response = client.post(
+        "/api/dialogue-memories",
+        json={
+            "ldapId": "legacy-ai-reply-001",
+            "question": "记住，我喜欢简洁摘要。",
+            "aiReply": "兼容旧调用方：这个字段仍然允许传入。",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["saved"] >= 1
 
 
 def test_admin_can_create_ldap_user_without_employee_password(client):

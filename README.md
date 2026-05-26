@@ -4,8 +4,9 @@
 
 ## 功能
 
-- 业务系统通过 HTTP POST 传入 `ldapId`、用户问题和 AI 回复，服务自动抽取个人记忆。
+- 业务系统通过 HTTP POST 传入 `ldapId` 和用户问题，服务自动抽取个人记忆。
 - 业务系统通过 HTTP GET 按 `ldapId` 读取个人记忆。
+- 个人用户可通过带 `token` 的访问链接进入系统，系统从 token 的 audience 识别本人 `ldapId`。
 - 员工不需要账号密码。
 - 记忆分为三层：个人基本信息、长期记忆、临时记忆。
 - 管理员用账号密码登录后，可查看、编辑、停用和删除指定员工记忆。
@@ -22,10 +23,17 @@ Content-Type: application/json
 
 {
   "ldapId": "alice001",
-  "question": "记住，我喜欢中文简洁摘要。",
-  "aiReply": "好的，我会记住你的回答偏好。"
+  "question": "记住，我喜欢中文简洁摘要。"
 }
 ```
+
+个人用户 token 链接访问：
+
+```text
+http://119.45.222.120:10012?token=<jwt>
+```
+
+系统会从请求头 `token` 对应 JWT 的 `audience[0]` 读取个人用户的 `ldapId`，个人用户只能读取和编辑自己的记忆。
 
 读取记忆：
 

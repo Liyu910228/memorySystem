@@ -8,7 +8,6 @@ def test_admin_e2e_memory_flow(client):
             "ldapId": "e2e001",
             "displayName": "E2E User",
             "question": "记住，我是财务部员工，偏好直接给结论。",
-            "aiReply": "好的，后续会优先给你简洁结论。",
         },
     )
     assert write_response.status_code == 200
@@ -48,7 +47,6 @@ def test_admin_can_update_markdown_file_by_ldap_id(client):
         json={
             "ldapId": "file-edit-001",
             "question": "记住，我需要能按 ldapId 查询和编辑文件。",
-            "aiReply": "好的，我会记录这个测试偏好。",
         },
     )
     admin_token = token(client, "admin", "admin123")
