@@ -1,4 +1,10 @@
 from tests.conftest import token
+from jose import jwt
+
+
+def external_token(ldap_id: str, audience_field: str = "aud") -> str:
+    payload = {audience_field: ldap_id} if audience_field else {"sub": ldap_id}
+    return jwt.encode(payload, "external-secret", algorithm="HS256")
 
 
 def test_dialogue_memory_isolated_by_ldap_id(client):
@@ -182,3 +188,52 @@ def test_admin_can_test_model_provider_without_api_key(client):
     assert payload["chat_ok"] is False
     assert payload["embedding_ok"] is False
     assert "API Key" in payload["message"]
+
+
+def test_personal_memory_api_requires_valid_external_token(client):
+    missing = client.get("/api/personal/memories")
+    assert missing.status_code == 401
+
+    invalid = client.get("/api/personal/memories", headers={"token": "not-a-jwt"})
+    assert invalid.status_code == 401
+
+    no_audience = client.get("/api/personal/memories", headers={"token": external_token("alice001", "")})
+    assert no_audience.status_code == 401
+
+
+def test_personal_memory_api_is_scoped_to_token_ldap_id(client):
+    alice_headers = {"token": external_token("alice001")}
+    bob_headers = {"token": external_token("bob001")}
+
+    created = client.post(
+        "/api/personal/memories",
+        json={"content": "alice 私人记忆", "layer": "profile", "memory_type": "manual", "status": "active"},
+        headers=alice_headers,
+    )
+    assert created.status_code == 200
+    memory_id = created.json()["id"]
+
+    alice_list = client.get("/api/personal/memories?layer=profile", headers=alice_headers)
+    assert alice_list.status_code == 200
+    assert any(item["id"] == memory_id for item in alice_list.json())
+
+    bob_update = client.patch(
+        f"/api/personal/memories/{memory_id}",
+        json={"content": "bob 不能改 alice 的记忆"},
+        headers=bob_headers,
+    )
+    assert bob_update.status_code == 404
+
+    updated = client.patch(
+        f"/api/personal/memories/{memory_id}",
+        json={"content": "alice 已更新记忆"},
+        headers=alice_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["content"] == "alice 已更新记忆"
+
+    deleted = client.delete(f"/api/personal/memories/{memory_id}", headers=alice_headers)
+    assert deleted.status_code == 200
+
+    alice_after_delete = client.get("/api/personal/memories?layer=profile", headers=alice_headers)
+    assert all(item["id"] != memory_id for item in alice_after_delete.json())

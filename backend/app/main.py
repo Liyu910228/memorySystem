@@ -7,6 +7,7 @@ from app.admin.router import router as admin_router
 from app.auth.router import router as auth_router
 from app.chat.router import ensure_main_thread, router as chat_router
 from app.memory.router import admin_router as admin_memory_router
+from app.memory.router import personal_router as personal_memory_router
 from app.memory.router import public_router as public_memory_router
 from app.memory.router import router as memory_router
 from app.shared.config import get_settings
@@ -71,6 +72,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
+app.include_router(personal_memory_router, prefix="/api")
 app.include_router(public_memory_router, prefix="/api")
 app.include_router(admin_memory_router, prefix="/api")
 app.include_router(users_router, prefix="/api")

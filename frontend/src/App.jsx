@@ -55,12 +55,22 @@ const sections = [
     icon: Settings,
   },
 ];
+const personalSections = sections.filter(section => ['read', 'edit'].includes(section.key));
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('adminToken');
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+async function personalApi(path, personalToken, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+  headers.token = personalToken;
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
@@ -375,7 +385,7 @@ function ModelConfig({ config, onSave }) {
   );
 }
 
-function MemoryCard({ memory, isAdmin, ldapId, onChanged }) {
+function MemoryCard({ memory, isAdmin, ldapId, onChanged, personalToken }) {
   const [content, setContent] = useState(memory.content);
 
   useEffect(() => {
@@ -383,36 +393,48 @@ function MemoryCard({ memory, isAdmin, ldapId, onChanged }) {
   }, [memory]);
 
   async function save() {
-    await api(`/admin/memories/${ldapId}/${memory.id}`, {
+    const path = personalToken ? `/personal/memories/${memory.id}` : `/admin/memories/${ldapId}/${memory.id}`;
+    const options = {
       method: 'PATCH',
       body: JSON.stringify({ content }),
-    });
+    };
+    if (personalToken) {
+      await personalApi(path, personalToken, options);
+    } else {
+      await api(path, options);
+    }
     onChanged();
   }
 
   async function remove() {
-    await api(`/admin/memories/${ldapId}/${memory.id}`, { method: 'DELETE' });
+    const path = personalToken ? `/personal/memories/${memory.id}` : `/admin/memories/${ldapId}/${memory.id}`;
+    if (personalToken) {
+      await personalApi(path, personalToken, { method: 'DELETE' });
+    } else {
+      await api(path, { method: 'DELETE' });
+    }
     onChanged();
   }
 
   return (
     <article className="memory-card">
-      <textarea value={content} onChange={event => setContent(event.target.value)} disabled={!isAdmin} />
+      <textarea value={content} onChange={event => setContent(event.target.value)} disabled={!isAdmin && !personalToken} />
       <div className="memory-meta">
-        {isAdmin && <button className="icon-action" onClick={save}><Save size={15} /> 保存</button>}
-        {isAdmin && <button className="icon-action danger" onClick={remove}><Trash2 size={15} /> 删除</button>}
+        {(isAdmin || personalToken) && <button className="icon-action" onClick={save}><Save size={15} /> 保存</button>}
+        {(isAdmin || personalToken) && <button className="icon-action danger" onClick={remove}><Trash2 size={15} /> 删除</button>}
       </div>
     </article>
   );
 }
 
-function MemoryCreateForm({ ldapId, layer, onCreated }) {
+function MemoryCreateForm({ ldapId, layer, onCreated, personalToken }) {
   const [content, setContent] = useState('');
 
   async function submit(event) {
     event.preventDefault();
     if (!ldapId.trim() || !content.trim()) return;
-    await api(`/admin/memories/${encodeURIComponent(ldapId)}`, {
+    const path = personalToken ? '/personal/memories' : `/admin/memories/${encodeURIComponent(ldapId)}`;
+    const options = {
       method: 'POST',
       body: JSON.stringify({
         content,
@@ -420,7 +442,12 @@ function MemoryCreateForm({ ldapId, layer, onCreated }) {
         memory_type: 'manual',
         status: 'active',
       }),
-    });
+    };
+    if (personalToken) {
+      await personalApi(path, personalToken, options);
+    } else {
+      await api(path, options);
+    }
     setContent('');
     onCreated();
   }
@@ -495,8 +522,11 @@ function MarkdownViewer({ markdown, canEdit, onSave }) {
 }
 
 function App() {
+  const initialPersonalToken = new URLSearchParams(window.location.search).get('token') || '';
   const [admin, setAdmin] = useState(null);
-  const [activeSection, setActiveSection] = useState('overview');
+  const [personalToken] = useState(initialPersonalToken);
+  const [personalError, setPersonalError] = useState('');
+  const [activeSection, setActiveSection] = useState(initialPersonalToken ? 'read' : 'overview');
   const [modelConfig, setModelConfig] = useState(null);
   const [ldapId, setLdapId] = useState('alice001');
   const [question, setQuestion] = useState('记住，我喜欢中文简洁摘要。');
@@ -513,6 +543,7 @@ function App() {
   const [markdownError, setMarkdownError] = useState('');
   const [readNotice, setReadNotice] = useState('');
   const [editNotice, setEditNotice] = useState('');
+  const isPersonalMode = Boolean(personalToken);
 
   async function checkAdmin() {
     try {
@@ -527,15 +558,38 @@ function App() {
     }
   }
 
+  async function checkPersonal() {
+    try {
+      const me = await personalApi('/personal/me', personalToken);
+      setReadLdapId(me.ldapId);
+      setEditLdapId(me.ldapId);
+      const [readResult, editResult] = await Promise.all([
+        personalApi(`/personal/memories${readLayerFilter ? `?layer=${readLayerFilter}` : ''}`, personalToken),
+        personalApi(`/personal/memories?layer=${editLayerFilter}`, personalToken),
+      ]);
+      setReadMemories(readResult);
+      setEditMemories(editResult);
+      setReadNotice(`已读取 ${readResult.length} 条记忆`);
+      setEditNotice(`已读取 ${editResult.length} 条可编辑记忆`);
+      setPersonalError('');
+    } catch {
+      setPersonalError('个人访问 token 无效，请从正确链接进入。');
+    }
+  }
+
   async function fetchMemories() {
     const suffix = readLayerFilter ? `?layer=${readLayerFilter}` : '';
-    const result = await api(`/dialogue-memories/${encodeURIComponent(readLdapId)}${suffix}`, { headers: {} });
+    const result = isPersonalMode
+      ? await personalApi(`/personal/memories${suffix}`, personalToken)
+      : await api(`/dialogue-memories/${encodeURIComponent(readLdapId)}${suffix}`, { headers: {} });
     setReadMemories(result);
     setReadNotice(`已读取 ${result.length} 条记忆`);
   }
 
   async function fetchEditMemories() {
-    const result = await api(`/admin/memories/${encodeURIComponent(editLdapId)}?layer=${editLayerFilter}`);
+    const result = isPersonalMode
+      ? await personalApi(`/personal/memories?layer=${editLayerFilter}`, personalToken)
+      : await api(`/admin/memories/${encodeURIComponent(editLdapId)}?layer=${editLayerFilter}`);
     setEditMemories(result);
     setEditNotice(`已读取 ${result.length} 条可编辑记忆`);
   }
@@ -563,6 +617,11 @@ function App() {
   }
 
   async function refreshAll() {
+    if (isPersonalMode) {
+      await fetchMemories();
+      await fetchEditMemories();
+      return;
+    }
     await fetchMemories();
     await fetchEditMemories();
     await fetchMarkdown();
@@ -578,7 +637,13 @@ function App() {
     await refreshAll();
   }
 
-  useEffect(() => { if (localStorage.getItem('adminToken')) checkAdmin(); }, []);
+  useEffect(() => {
+    if (personalToken) {
+      checkPersonal();
+    } else if (localStorage.getItem('adminToken')) {
+      checkAdmin();
+    }
+  }, []);
 
   const combinedReadMemories = readMemories
     .map(memory => memory.content.trim())
@@ -598,11 +663,12 @@ function App() {
     setEditPage(1);
   }, [editLayerFilter, editLdapId]);
 
-  if (!admin) {
+  if (!admin && !isPersonalMode) {
     return <LoginPage onLogin={checkAdmin} />;
   }
 
-  const activeSectionMeta = sections.find(section => section.key === activeSection) || sections[0];
+  const availableSections = isPersonalMode ? personalSections : sections;
+  const activeSectionMeta = availableSections.find(section => section.key === activeSection) || availableSections[0];
 
   return (
     <main className="workspace">
@@ -615,7 +681,7 @@ function App() {
           </div>
         </div>
         <nav className="sidebar-nav">
-          {sections.map(section => {
+          {availableSections.map(section => {
             const Icon = section.icon;
             return (
               <button
@@ -630,8 +696,8 @@ function App() {
           })}
         </nav>
         <div className="sidebar-user">
-          <span>管理员</span>
-          <strong>{admin.display_name}</strong>
+          <span>{isPersonalMode ? '个人用户' : '管理员'}</span>
+          <strong>{isPersonalMode ? readLdapId : admin.display_name}</strong>
         </div>
       </aside>
 
@@ -643,11 +709,15 @@ function App() {
           </div>
           <div className="admin-state">
             <button type="button" onClick={refreshAll}><RefreshCw size={16} /></button>
-            <button type="button" onClick={() => { localStorage.removeItem('adminToken'); setAdmin(null); setModelConfig(null); setMarkdown(null); }}><LogOut size={16} />退出</button>
+            {!isPersonalMode && (
+              <button type="button" onClick={() => { localStorage.removeItem('adminToken'); setAdmin(null); setModelConfig(null); setMarkdown(null); }}><LogOut size={16} />退出</button>
+            )}
           </div>
         </header>
 
-        {activeSection === 'overview' && (
+        {personalError && <div className="panel"><p className="error">{personalError}</p></div>}
+
+        {!isPersonalMode && activeSection === 'overview' && (
           <section className="status-card">
             <div>
               <span>Memory AI 状态</span>
@@ -662,7 +732,7 @@ function App() {
         )}
 
       <section className="content-shell">
-        {activeSection === 'ingest' && (
+        {!isPersonalMode && activeSection === 'ingest' && (
         <div className="panel">
           <h1>HTTP 记忆抽取</h1>
           <form className="dialogue-form" onSubmit={submitDialogue}>
@@ -674,7 +744,7 @@ function App() {
         </div>
         )}
 
-        {activeSection === 'model' && (
+        {!isPersonalMode && activeSection === 'model' && (
         <div className="panel admin-panel">
           <ModelConfig config={modelConfig} onSave={setModelConfig} />
         </div>
@@ -684,7 +754,7 @@ function App() {
         <div className="panel memory-panel">
           <div className="memory-toolbar">
             <h2>GET 读取记忆</h2>
-            <label className="inline-search">ldapId<input value={readLdapId} onChange={event => setReadLdapId(event.target.value)} /></label>
+            <label className="inline-search">ldapId<input value={readLdapId} onChange={event => setReadLdapId(event.target.value)} readOnly={isPersonalMode} /></label>
             <select value={readLayerFilter} onChange={event => setReadLayerFilter(event.target.value)}>
               <option value="">全部层级</option>
               {layers.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
@@ -702,19 +772,19 @@ function App() {
         <div className="panel edit-memory-panel">
           <div className="memory-toolbar edit-toolbar">
             <h2>用户记忆编辑</h2>
-            <label className="inline-search">ldapId<input value={editLdapId} onChange={event => setEditLdapId(event.target.value)} /></label>
+            <label className="inline-search">ldapId<input value={editLdapId} onChange={event => setEditLdapId(event.target.value)} readOnly={isPersonalMode} /></label>
             <select value={editLayerFilter} onChange={event => setEditLayerFilter(event.target.value)}>
               {layers.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
             <button onClick={fetchEditMemories} disabled={!editLdapId.trim()}><RefreshCw size={15} /> 查询</button>
           </div>
           {editNotice && <p className="notice toolbar-notice">{editNotice}</p>}
-          <MemoryCreateForm ldapId={editLdapId} layer={editLayerFilter} onCreated={fetchEditMemories} />
+          <MemoryCreateForm ldapId={editLdapId} layer={editLayerFilter} onCreated={fetchEditMemories} personalToken={personalToken} />
           <div className="layer-grid edit-layer-grid single-layer-grid">
             <section className="layer-column" key={activeEditLayer.value}>
               <h3>{activeEditLayer.label}</h3>
               {pagedEditMemories.map(memory => (
-                <MemoryCard key={memory.id} memory={memory} ldapId={editLdapId} isAdmin={!!admin} onChanged={fetchEditMemories} />
+                <MemoryCard key={memory.id} memory={memory} ldapId={editLdapId} isAdmin={!!admin} personalToken={personalToken} onChanged={fetchEditMemories} />
               ))}
               {activeEditMemories.length === 0 && <p className="empty">暂无可编辑记忆</p>}
               {activeEditMemories.length > EDIT_PAGE_SIZE && (
@@ -741,7 +811,7 @@ function App() {
         </div>
         )}
 
-        {activeSection === 'markdown' && (
+        {!isPersonalMode && activeSection === 'markdown' && (
         <div className="panel markdown-panel">
           <div className="memory-toolbar">
             <label className="md-search">

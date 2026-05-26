@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import get_current_user, get_external_ldap_id, require_admin
 from app.memory.service import (
     ensure_user_memory_markdown,
     extract_from_dialogue,
@@ -100,6 +100,94 @@ def get_dialogue_memories(
 
 
 admin_router = APIRouter(prefix="/admin/memories", tags=["admin-memories"])
+personal_router = APIRouter(prefix="/personal", tags=["personal-memories"])
+
+
+@personal_router.get("/me")
+def personal_me(ldap_id: str = Depends(get_external_ldap_id)):
+    return {"ldapId": ldap_id}
+
+
+@personal_router.get("/memories", response_model=list[MemoryOut])
+def personal_get_memories(
+    layer: str | None = None,
+    q: str | None = None,
+    ldap_id: str = Depends(get_external_ldap_id),
+    db: Session = Depends(get_db),
+):
+    user = db.scalar(select(User).where(User.ldap_id == ldap_id))
+    if not user:
+        return []
+    return list_memories(db, user.id, q, layer)
+
+
+@personal_router.post("/memories", response_model=MemoryOut)
+async def personal_create_memory(
+    payload: MemoryCreate,
+    ldap_id: str = Depends(get_external_ldap_id),
+    db: Session = Depends(get_db),
+):
+    user = get_or_create_employee_by_ldap(db, ldap_id, payload.display_name)
+    memory = Memory(
+        user_id=user.id,
+        content=payload.content,
+        layer=payload.layer,
+        memory_type=payload.memory_type,
+        status=payload.status,
+        confidence=payload.confidence,
+        embedding=await embedding(payload.content),
+    )
+    db.add(memory)
+    db.commit()
+    db.refresh(memory)
+    sync_user_memory_markdown(db, user)
+    return memory
+
+
+@personal_router.patch("/memories/{memory_id}", response_model=MemoryOut)
+async def personal_update_memory(
+    memory_id: int,
+    payload: MemoryUpdate,
+    ldap_id: str = Depends(get_external_ldap_id),
+    db: Session = Depends(get_db),
+):
+    user = db.scalar(select(User).where(User.ldap_id == ldap_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    memory = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id))
+    if not memory or memory.status == MemoryStatus.deleted.value:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    if payload.content is not None:
+        memory.content = payload.content
+        memory.embedding = await embedding(payload.content)
+    if payload.layer is not None:
+        memory.layer = payload.layer
+    if payload.memory_type is not None:
+        memory.memory_type = payload.memory_type
+    if payload.status is not None:
+        memory.status = payload.status
+    db.commit()
+    db.refresh(memory)
+    sync_user_memory_markdown(db, user)
+    return memory
+
+
+@personal_router.delete("/memories/{memory_id}")
+def personal_delete_memory(
+    memory_id: int,
+    ldap_id: str = Depends(get_external_ldap_id),
+    db: Session = Depends(get_db),
+):
+    user = db.scalar(select(User).where(User.ldap_id == ldap_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    memory = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id))
+    if not memory:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    memory.status = MemoryStatus.deleted.value
+    db.commit()
+    sync_user_memory_markdown(db, user)
+    return {"ok": True}
 
 
 @admin_router.get("/{ldap_id}", response_model=list[MemoryOut])
