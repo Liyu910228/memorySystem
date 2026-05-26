@@ -387,12 +387,14 @@ function ModelConfig({ config, onSave }) {
 
 function MemoryCard({ memory, isAdmin, ldapId, onChanged, personalToken }) {
   const [content, setContent] = useState(memory.content);
+  const [saveNotice, setSaveNotice] = useState('');
 
   useEffect(() => {
     setContent(memory.content);
   }, [memory]);
 
   async function save() {
+    setSaveNotice('');
     const path = personalToken ? `/personal/memories/${memory.id}` : `/admin/memories/${ldapId}/${memory.id}`;
     const options = {
       method: 'PATCH',
@@ -403,6 +405,7 @@ function MemoryCard({ memory, isAdmin, ldapId, onChanged, personalToken }) {
     } else {
       await api(path, options);
     }
+    setSaveNotice('已经保存');
     onChanged();
   }
 
@@ -418,21 +421,31 @@ function MemoryCard({ memory, isAdmin, ldapId, onChanged, personalToken }) {
 
   return (
     <article className="memory-card">
-      <textarea value={content} onChange={event => setContent(event.target.value)} disabled={!isAdmin && !personalToken} />
+      <textarea
+        value={content}
+        onChange={event => {
+          setContent(event.target.value);
+          setSaveNotice('');
+        }}
+        disabled={!isAdmin && !personalToken}
+      />
       <div className="memory-meta">
         {(isAdmin || personalToken) && <button className="icon-action" onClick={save}><Save size={15} /> 保存</button>}
         {(isAdmin || personalToken) && <button className="icon-action danger" onClick={remove}><Trash2 size={15} /> 删除</button>}
       </div>
+      {saveNotice && <p className="memory-save-notice">{saveNotice}</p>}
     </article>
   );
 }
 
 function MemoryCreateForm({ ldapId, layer, onCreated, personalToken }) {
   const [content, setContent] = useState('');
+  const [saveNotice, setSaveNotice] = useState('');
 
   async function submit(event) {
     event.preventDefault();
     if (!ldapId.trim() || !content.trim()) return;
+    setSaveNotice('');
     const path = personalToken ? '/personal/memories' : `/admin/memories/${encodeURIComponent(ldapId)}`;
     const options = {
       method: 'POST',
@@ -449,6 +462,7 @@ function MemoryCreateForm({ ldapId, layer, onCreated, personalToken }) {
       await api(path, options);
     }
     setContent('');
+    setSaveNotice('已经保存');
     onCreated();
   }
 
@@ -458,6 +472,7 @@ function MemoryCreateForm({ ldapId, layer, onCreated, personalToken }) {
       <div className="memory-create-row">
         <button className="primary" type="submit"><Save size={15} /> 新增</button>
       </div>
+      {saveNotice && <p className="memory-save-notice">{saveNotice}</p>}
     </form>
   );
 }

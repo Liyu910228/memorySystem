@@ -330,6 +330,12 @@ h3 { font-size: 15px; margin-bottom: 10px; }
 .primary:hover { background: var(--primary-strong); }
 .notice { color: var(--primary); margin: 0; }
 .error { color: var(--danger); margin: 0; }
+.memory-save-notice {
+  margin: 8px 0 0;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 700;
+}
 .admin-panel p { color: var(--muted); line-height: 1.6; }
 
 .memory-toolbar {
