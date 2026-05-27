@@ -9,6 +9,7 @@ __pycache__/
 *.egg-info/
 backend/data/
 backend/test-data/
+backend/tmp-test-memories/
 node_modules/
 dist/
 generated/

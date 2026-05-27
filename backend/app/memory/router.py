@@ -8,12 +8,13 @@ from app.memory.service import (
     extract_from_dialogue,
     get_or_create_employee_by_ldap,
     list_memories,
+    summarize_temporary_memories,
     sync_user_memory_markdown,
     update_user_memory_markdown_file,
 )
 from app.shared.database import get_db
 from app.shared.llm import embedding
-from app.shared.models import Memory, MemoryStatus, User
+from app.shared.models import Memory, MemoryLayer, MemoryStatus, User
 from app.shared.schemas import DialogueMemoryIn, MarkdownUpdate, MemoryCreate, MemoryOut, MemoryUpdate
 
 router = APIRouter(prefix="/memories", tags=["memories"])
@@ -39,6 +40,7 @@ async def update_memory(
     memory = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id))
     if not memory or memory.status == MemoryStatus.deleted.value:
         raise HTTPException(status_code=404, detail="Memory not found")
+    was_temporary = memory.layer == MemoryLayer.temporary.value
     if payload.content is not None:
         memory.content = payload.content
         memory.embedding = await embedding(payload.content)
@@ -50,6 +52,8 @@ async def update_memory(
         memory.status = payload.status
     db.commit()
     db.refresh(memory)
+    if was_temporary or memory.layer == MemoryLayer.temporary.value:
+        await summarize_temporary_memories(db, user.id)
     sync_user_memory_markdown(db, user)
     return memory
 
@@ -140,6 +144,8 @@ async def personal_create_memory(
     db.add(memory)
     db.commit()
     db.refresh(memory)
+    if memory.layer == MemoryLayer.temporary.value:
+        await summarize_temporary_memories(db, user.id)
     sync_user_memory_markdown(db, user)
     return memory
 
@@ -157,6 +163,7 @@ async def personal_update_memory(
     memory = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id))
     if not memory or memory.status == MemoryStatus.deleted.value:
         raise HTTPException(status_code=404, detail="Memory not found")
+    was_temporary = memory.layer == MemoryLayer.temporary.value
     if payload.content is not None:
         memory.content = payload.content
         memory.embedding = await embedding(payload.content)
@@ -168,6 +175,8 @@ async def personal_update_memory(
         memory.status = payload.status
     db.commit()
     db.refresh(memory)
+    if was_temporary or memory.layer == MemoryLayer.temporary.value:
+        await summarize_temporary_memories(db, user.id)
     sync_user_memory_markdown(db, user)
     return memory
 
@@ -224,6 +233,8 @@ async def admin_create_memory(
     db.add(memory)
     db.commit()
     db.refresh(memory)
+    if memory.layer == MemoryLayer.temporary.value:
+        await summarize_temporary_memories(db, user.id)
     sync_user_memory_markdown(db, user)
     return memory
 
@@ -280,6 +291,7 @@ async def admin_update_memory(
     memory = db.scalar(select(Memory).where(Memory.id == memory_id, Memory.user_id == user.id))
     if not memory or memory.status == MemoryStatus.deleted.value:
         raise HTTPException(status_code=404, detail="Memory not found")
+    was_temporary = memory.layer == MemoryLayer.temporary.value
     if payload.content is not None:
         memory.content = payload.content
         memory.embedding = await embedding(payload.content)
@@ -291,6 +303,8 @@ async def admin_update_memory(
         memory.status = payload.status
     db.commit()
     db.refresh(memory)
+    if was_temporary or memory.layer == MemoryLayer.temporary.value:
+        await summarize_temporary_memories(db, user.id)
     sync_user_memory_markdown(db, user)
     return memory
 

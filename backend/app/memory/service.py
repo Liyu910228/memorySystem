@@ -1,15 +1,19 @@
 import asyncio
 import re
+from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.shared.config import get_settings
-from app.shared.llm import cosine_similarity, embedding, extract_memories
-from app.shared.models import Memory, MemoryLayer, MemoryStatus, Message, Role, User
+from app.shared.llm import chat_completion, cosine_similarity, embedding, extract_memories
+from app.shared.model_config import get_runtime_model_config
+from app.shared.models import Memory, MemoryLayer, MemoryStatus, Message, Role, User, now_utc
 
 settings = get_settings()
+TEMPORARY_MEMORY_DAYS = 5
+TEMPORARY_SUMMARY_TYPE = "temporary_summary"
 
 LAYER_FILES = {
     MemoryLayer.profile.value: ("profile.md", "个人基本信息"),
@@ -21,6 +25,143 @@ LAYER_FILES = {
 def normalize_layer(layer: str | None) -> str:
     valid = {item.value for item in MemoryLayer}
     return layer if layer in valid else MemoryLayer.long_term.value
+
+
+def temporary_memory_cutoff():
+    return now_utc() - timedelta(days=TEMPORARY_MEMORY_DAYS)
+
+
+def is_temporary_summary(memory: Memory) -> bool:
+    return memory.layer == MemoryLayer.temporary.value and memory.memory_type == TEMPORARY_SUMMARY_TYPE
+
+
+def cleanup_expired_temporary_memories(db: Session, user_id: int) -> int:
+    result = db.execute(
+        delete(Memory).where(
+            Memory.user_id == user_id,
+            Memory.layer == MemoryLayer.temporary.value,
+            Memory.memory_type != TEMPORARY_SUMMARY_TYPE,
+            Memory.updated_at < temporary_memory_cutoff(),
+        )
+    )
+    return int(result.rowcount or 0)
+
+
+def recent_temporary_memory_sources(db: Session, user_id: int) -> list[Memory]:
+    return list(
+        db.scalars(
+            select(Memory)
+            .where(
+                Memory.user_id == user_id,
+                Memory.layer == MemoryLayer.temporary.value,
+                Memory.memory_type != TEMPORARY_SUMMARY_TYPE,
+                Memory.status != MemoryStatus.deleted.value,
+                Memory.updated_at >= temporary_memory_cutoff(),
+            )
+            .order_by(Memory.updated_at.desc())
+        )
+    )
+
+
+def get_temporary_summary_memory(db: Session, user_id: int) -> Memory | None:
+    return db.scalar(
+        select(Memory).where(
+            Memory.user_id == user_id,
+            Memory.layer == MemoryLayer.temporary.value,
+            Memory.memory_type == TEMPORARY_SUMMARY_TYPE,
+            Memory.status != MemoryStatus.deleted.value,
+        )
+    )
+
+
+def fallback_temporary_summary(memories: list[Memory]) -> str:
+    snippets: list[str] = []
+    seen: set[str] = set()
+    for memory in memories:
+        text = re.sub(r"\s+", " ", memory.content).strip()
+        text = re.sub(r"^(user|assistant|system):\s*", "", text, flags=re.IGNORECASE)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        snippets.append(text[:120])
+        if len(snippets) >= 5:
+            break
+    if not snippets:
+        return ""
+    return f"最近 {TEMPORARY_MEMORY_DAYS} 天关注：" + "；".join(snippets)
+
+
+async def build_temporary_summary(db: Session, memories: list[Memory]) -> str:
+    fallback = fallback_temporary_summary(memories)
+    if not fallback or not get_runtime_model_config(db).api_key:
+        return fallback
+
+    source_text = "\n".join(f"- {memory.content.strip()}" for memory in memories[:20])
+    prompt = (
+        "你是个人记忆系统的整理助手。请把用户最近 5 天的临时记忆整理成一条简短中文汇总，"
+        "只保留用户最近关注的事项、当前任务、阶段性上下文。不要编造信息，不要超过 120 字。"
+    )
+    try:
+        summary = await chat_completion(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": source_text},
+            ]
+        )
+    except Exception:
+        return fallback
+    summary = re.sub(r"\s+", " ", summary).strip()
+    if summary and not summary.startswith("最近"):
+        summary = f"最近 {TEMPORARY_MEMORY_DAYS} 天关注：{summary}"
+    return summary[:500] if summary else fallback
+
+
+def prune_stale_temporary_summary(db: Session, user_id: int) -> None:
+    deleted = cleanup_expired_temporary_memories(db, user_id)
+    if recent_temporary_memory_sources(db, user_id):
+        if deleted:
+            db.commit()
+        return
+    summary = get_temporary_summary_memory(db, user_id)
+    if summary:
+        db.delete(summary)
+    if deleted or summary:
+        db.commit()
+
+
+async def summarize_temporary_memories(db: Session, user_id: int) -> Memory | None:
+    cleanup_expired_temporary_memories(db, user_id)
+    sources = recent_temporary_memory_sources(db, user_id)
+    summary = get_temporary_summary_memory(db, user_id)
+    if not sources:
+        if summary:
+            db.delete(summary)
+            db.commit()
+        return None
+
+    content = await build_temporary_summary(db, sources)
+    if not content:
+        return None
+    vector = await embedding(content)
+    if summary:
+        summary.content = content
+        summary.confidence = max((memory.confidence for memory in sources), default=0.7)
+        summary.status = MemoryStatus.active.value
+        summary.embedding = vector
+    else:
+        summary = Memory(
+            user_id=user_id,
+            content=content,
+            layer=MemoryLayer.temporary.value,
+            memory_type=TEMPORARY_SUMMARY_TYPE,
+            confidence=max((memory.confidence for memory in sources), default=0.7),
+            status=MemoryStatus.active.value,
+            embedding=vector,
+        )
+        db.add(summary)
+    db.commit()
+    db.refresh(summary)
+    return summary
 
 
 def safe_ldap_path(ldap_id: str) -> str:
@@ -98,11 +239,18 @@ def update_user_memory_markdown_file(user: User, layer: str, content: str) -> st
 
 
 def list_memories(db: Session, user_id: int, query: str | None = None, layer: str | None = None) -> list[Memory]:
+    normalized_layer = normalize_layer(layer) if layer else None
+    if normalized_layer == MemoryLayer.temporary.value or normalized_layer is None:
+        prune_stale_temporary_summary(db, user_id)
     stmt = select(Memory).where(Memory.user_id == user_id, Memory.status != MemoryStatus.deleted.value)
     if query:
         stmt = stmt.where(Memory.content.ilike(f"%{query}%"))
-    if layer:
-        stmt = stmt.where(Memory.layer == normalize_layer(layer))
+    if normalized_layer:
+        stmt = stmt.where(Memory.layer == normalized_layer)
+        if normalized_layer == MemoryLayer.temporary.value:
+            stmt = stmt.where(Memory.memory_type == TEMPORARY_SUMMARY_TYPE)
+    else:
+        stmt = stmt.where(or_(Memory.layer != MemoryLayer.temporary.value, Memory.memory_type == TEMPORARY_SUMMARY_TYPE))
     return list(db.scalars(stmt.order_by(Memory.updated_at.desc())))
 
 
@@ -136,15 +284,21 @@ async def recall_memories(db: Session, user_id: int, text: str, limit: int = 5) 
 async def store_memory_candidates(db: Session, user_id: int, transcript: str, session_id: int | None = None) -> int:
     candidates = await extract_memories(transcript)
     saved = 0
+    has_temporary_candidate = False
     for item in candidates:
         content = str(item.get("content", "")).strip()
         if len(content) < 4:
             continue
+        layer = normalize_layer(item.get("layer"))
+        memory_type = str(item.get("memory_type", "preference"))
+        if layer == MemoryLayer.temporary.value:
+            has_temporary_candidate = True
         existing = db.scalar(
             select(Memory).where(
                 Memory.user_id == user_id,
                 Memory.status != MemoryStatus.deleted.value,
                 Memory.content == content,
+                Memory.memory_type != TEMPORARY_SUMMARY_TYPE,
             )
         )
         if existing:
@@ -155,14 +309,16 @@ async def store_memory_candidates(db: Session, user_id: int, transcript: str, se
                 user_id=user_id,
                 source_session_id=session_id,
                 content=content,
-                layer=normalize_layer(item.get("layer")),
-                memory_type=str(item.get("memory_type", "preference")),
+                layer=layer,
+                memory_type=memory_type,
                 confidence=float(item.get("confidence", 0.7)),
                 embedding=vector,
             )
         )
         saved += 1
     db.commit()
+    if has_temporary_candidate:
+        await summarize_temporary_memories(db, user_id)
     user = db.get(User, user_id)
     if user:
         sync_user_memory_markdown(db, user)
