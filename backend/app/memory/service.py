@@ -21,6 +21,12 @@ LAYER_FILES = {
     MemoryLayer.temporary.value: ("temporary.md", "临时记忆"),
 }
 
+PUBLIC_LAYER_LABELS = {
+    MemoryLayer.profile.value: "个人基本信息",
+    MemoryLayer.long_term.value: "长期记忆",
+    MemoryLayer.temporary.value: "临时记忆",
+}
+
 
 def normalize_layer(layer: str | None) -> str:
     valid = {item.value for item in MemoryLayer}
@@ -227,40 +233,27 @@ def compact_memory_contents(memories: list[Memory]) -> list[str]:
     return list(reversed(compacted))
 
 
+def is_non_memory_content(content: str) -> bool:
+    cleaned = re.sub(r"\s+", "", content.strip().lower())
+    return cleaned in {"我是谁", "你知道我是谁吗", "我叫什么", "我多大"}
+
+
 def render_dialogue_memory_markdown(
     db: Session,
     user: User,
     layer: str | None = None,
     query: str | None = None,
 ) -> str:
-    ldap_id = user.ldap_id or user.username
     selected_layers = [normalize_layer(layer)] if layer else list(LAYER_FILES)
-    lines = [
-        f"# {ldap_id} 的个人记忆汇总",
-        "",
-        f"- ldapId: `{ldap_id}`",
-        f"- 用户显示名: {user.display_name}",
-        "",
-    ]
-    has_content = False
+    sections: list[str] = []
     for current_layer in selected_layers:
         memories = list_memories(db, user.id, query, current_layer)
-        title = LAYER_FILES[current_layer][1]
-        lines.extend([f"## {title}", ""])
-        if not memories:
-            lines.extend(["暂无记忆。", ""])
-            continue
         contents = compact_memory_contents(memories)
+        contents = [content for content in contents if not is_non_memory_content(content)]
         if not contents:
-            lines.extend(["暂无记忆。", ""])
             continue
-        has_content = True
-        for content in contents:
-            lines.append(f"- {content}")
-        lines.append("")
-    if not has_content:
-        lines.append("> 暂无可用记忆。")
-    return "\n".join(lines).strip() + "\n"
+        sections.append(f"{PUBLIC_LAYER_LABELS[current_layer]}：{'；'.join(contents)}")
+    return "；".join(sections) + ("；" if sections else "")
 
 
 def sync_user_memory_markdown(db: Session, user: User) -> dict[str, str]:

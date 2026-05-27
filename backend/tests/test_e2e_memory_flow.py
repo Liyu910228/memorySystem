@@ -17,7 +17,7 @@ def test_admin_e2e_memory_flow(client):
     assert read_response.status_code == 200
     public_markdown = read_response.json()
     assert public_markdown["ldapId"] == "e2e001"
-    assert "个人记忆汇总" in public_markdown["content"]
+    assert "个人基本信息：" in public_markdown["content"]
 
     admin_token = token(client, "admin", "admin123")
     headers = {"Authorization": f"Bearer {admin_token}"}

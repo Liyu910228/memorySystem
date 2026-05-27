@@ -11,6 +11,18 @@ from app.shared.model_config import get_runtime_model_config
 
 settings = get_settings()
 
+NON_MEMORY_QUESTION_PATTERNS = [
+    r"^(user:\s*)?我是谁[？?。.\s]*$",
+    r"^(user:\s*)?你知道我是谁吗[？?。.\s]*$",
+    r"^(user:\s*)?我叫什么[？?。.\s]*$",
+    r"^(user:\s*)?我多大[？?。.\s]*$",
+]
+
+
+def _looks_like_non_memory_question(text: str) -> bool:
+    cleaned = re.sub(r"\s+", "", text.strip().lower())
+    return any(re.match(pattern, cleaned) for pattern in NON_MEMORY_QUESTION_PATTERNS)
+
 
 def _mock_embedding(text: str, dimensions: int = 64) -> list[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -30,6 +42,9 @@ def cosine_similarity(left: list[float] | None, right: list[float] | None) -> fl
 
 
 def _heuristic_extract(transcript: str) -> list[dict]:
+    if _looks_like_non_memory_question(transcript):
+        return []
+
     lowered = transcript.lower()
     memories: list[dict] = []
 
@@ -83,7 +98,7 @@ def _merge_memory_candidates(*candidate_groups: list[dict]) -> list[dict]:
             content = str(item.get("content", "")).strip()
             layer = str(item.get("layer", "long_term"))
             key = (layer, content)
-            if not content or key in seen:
+            if not content or _looks_like_non_memory_question(content) or key in seen:
                 continue
             seen.add(key)
             merged.append(item)

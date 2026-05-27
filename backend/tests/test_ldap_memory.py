@@ -31,10 +31,10 @@ def test_dialogue_memory_public_read_returns_markdown_by_ldap_id(client):
     alice_memories = client.get("/api/dialogue-memories/alice001")
     assert bob.status_code == 200
     assert bob.json()["ldapId"] == "bob001"
-    assert "暂无可用记忆" in bob.json()["content"]
+    assert bob.json()["content"] == ""
     assert alice_memories.status_code == 200
     assert alice_memories.json()["ldapId"] == "alice001"
-    assert "# alice001 的个人记忆汇总" in alice_memories.json()["content"]
+    assert alice_memories.json()["content"].startswith("长期记忆：")
     assert "concise Chinese answers" in alice_memories.json()["content"]
 
 
@@ -48,9 +48,22 @@ def test_dialogue_memory_extracts_from_question_only(client):
 
     memories = client.get("/api/dialogue-memories/question-only-001")
     assert memories.status_code == 200
-    assert "个人记忆汇总" in memories.json()["content"]
+    assert memories.json()["content"].startswith("个人基本信息：")
     assert "李玉" in memories.json()["content"] or "35" in memories.json()["content"]
     assert memories.json()["content"].count("李玉") == 1
+
+
+def test_dialogue_memory_ignores_identity_questions(client):
+    response = client.post(
+        "/api/dialogue-memories",
+        json={"ldapId": "identity-question-001", "question": "我是谁"},
+    )
+    assert response.status_code == 200
+    assert response.json()["saved"] == 0
+
+    memories = client.get("/api/dialogue-memories/identity-question-001")
+    assert memories.status_code == 200
+    assert memories.json()["content"] == ""
 
 
 def test_dialogue_memory_writes_markdown_files(client):
@@ -121,7 +134,7 @@ def test_temporary_memories_are_returned_as_single_recent_markdown_summary(clien
     assert memories.status_code == 200
     payload = memories.json()
     assert payload["ldapId"] == "temp-summary-001"
-    assert "临时记忆" in payload["content"]
+    assert payload["content"].startswith("临时记忆：")
     assert "quarterly review deck" in payload["content"]
     assert "API rollout notes" in payload["content"]
     assert "temporary_summary" not in payload["content"]

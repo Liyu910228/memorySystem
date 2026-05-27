@@ -93,7 +93,7 @@ const apiDocs = [
     ],
     response: `{
   "ldapId": "alice001",
-  "content": "# alice001 的个人记忆汇总\\n\\n## 长期记忆\\n\\n- 该员工喜欢先看结论，再看详细分析。\\n"
+  "content": "长期记忆：该员工喜欢先看结论，再看详细分析；"
 }`,
   },
   {
