@@ -75,6 +75,11 @@ class MemoryOut(BaseModel):
     updated_at: datetime
 
 
+class DialogueMemoryMarkdownOut(BaseModel):
+    ldapId: str
+    content: str
+
+
 class MemoryUpdate(BaseModel):
     content: str | None = Field(default=None, min_length=1, max_length=12000)
     layer: str | None = Field(default=None, max_length=40)

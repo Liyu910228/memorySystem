@@ -91,17 +91,10 @@ const apiDocs = [
       ['layer', 'query', '可选：profile / long_term / temporary。'],
       ['q', 'query', '可选，按记忆内容关键字模糊检索。'],
     ],
-    response: `[
-  {
-    "id": 18,
-    "ldap_id": "alice001",
-    "content": "该员工喜欢先看结论，再看详细分析。",
-    "layer": "long_term",
-    "memory_type": "preference",
-    "status": "active",
-    "confidence": 0.85
-  }
-]`,
+    response: `{
+  "ldapId": "alice001",
+  "content": "# alice001 的个人记忆汇总\\n\\n## 长期记忆\\n\\n- 该员工喜欢先看结论，再看详细分析。\\n"
+}`,
   },
   {
     title: '个人 token 访问与编辑',
@@ -695,6 +688,7 @@ function App() {
   const [question, setQuestion] = useState('记住，我喜欢中文简洁摘要。');
   const [readLdapId, setReadLdapId] = useState('alice001');
   const [readMemories, setReadMemories] = useState([]);
+  const [readMarkdown, setReadMarkdown] = useState('');
   const [editLdapId, setEditLdapId] = useState('alice001');
   const [editMemories, setEditMemories] = useState([]);
   const [markdown, setMarkdown] = useState(null);
@@ -731,6 +725,7 @@ function App() {
         personalApi(`/personal/memories?layer=${editLayerFilter}`, personalToken),
       ]);
       setReadMemories(readResult);
+      setReadMarkdown('');
       setEditMemories(editResult);
       setReadNotice(`已读取 ${readResult.length} 条记忆`);
       setEditNotice(`已读取 ${editResult.length} 条可编辑记忆`);
@@ -745,8 +740,15 @@ function App() {
     const result = isPersonalMode
       ? await personalApi(`/personal/memories${suffix}`, personalToken)
       : await api(`/dialogue-memories/${encodeURIComponent(readLdapId)}${suffix}`, { headers: {} });
-    setReadMemories(result);
-    setReadNotice(`已读取 ${result.length} 条记忆`);
+    if (Array.isArray(result)) {
+      setReadMemories(result);
+      setReadMarkdown('');
+      setReadNotice(`已读取 ${result.length} 条记忆`);
+    } else {
+      setReadMemories([]);
+      setReadMarkdown(result.content || '');
+      setReadNotice(result.content ? '已读取 Markdown 记忆汇总' : '暂无记忆');
+    }
   }
 
   async function fetchEditMemories() {
@@ -812,6 +814,7 @@ function App() {
     .map(memory => memory.content.trim())
     .filter(Boolean)
     .join('；');
+  const readDisplayContent = readMarkdown || combinedReadMemories;
 
   const activeEditLayer = layers.find(layer => layer.value === editLayerFilter) || layers[0];
   const activeEditMemories = editMemories.filter(memory => memory.layer === activeEditLayer.value);
@@ -933,7 +936,7 @@ function App() {
           </div>
           {readNotice && <p className="notice toolbar-notice">{readNotice}</p>}
           <div className="combined-memory-card">
-            {combinedReadMemories || <span>暂无记忆</span>}
+            {readDisplayContent || <span>暂无记忆</span>}
           </div>
         </div>
         )}

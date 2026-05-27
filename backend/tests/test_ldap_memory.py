@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
+from jose import jwt
+
 from app.main import app
 from app.shared.database import get_db
 from app.shared.models import Memory, MemoryLayer, MemoryStatus, User
 from tests.conftest import token
-from jose import jwt
 
 
 def external_token(ldap_id: str, audience_field: str = "aud") -> str:
@@ -18,13 +19,10 @@ def open_test_db_session():
     return generator, next(generator)
 
 
-def test_dialogue_memory_isolated_by_ldap_id(client):
+def test_dialogue_memory_public_read_returns_markdown_by_ldap_id(client):
     alice = client.post(
         "/api/dialogue-memories",
-        json={
-            "ldapId": "alice001",
-            "question": "记住，我喜欢用中文回答和简洁摘要。",
-        },
+        json={"ldapId": "alice001", "question": "remember: I prefer concise Chinese answers."},
     )
     assert alice.status_code == 200
     assert alice.json()["saved"] >= 1
@@ -32,33 +30,33 @@ def test_dialogue_memory_isolated_by_ldap_id(client):
     bob = client.get("/api/dialogue-memories/bob001")
     alice_memories = client.get("/api/dialogue-memories/alice001")
     assert bob.status_code == 200
-    assert bob.json() == []
-    assert len(alice_memories.json()) >= 1
+    assert bob.json()["ldapId"] == "bob001"
+    assert "暂无可用记忆" in bob.json()["content"]
+    assert alice_memories.status_code == 200
+    assert alice_memories.json()["ldapId"] == "alice001"
+    assert "# alice001 的个人记忆汇总" in alice_memories.json()["content"]
+    assert "concise Chinese answers" in alice_memories.json()["content"]
 
 
 def test_dialogue_memory_extracts_from_question_only(client):
     response = client.post(
         "/api/dialogue-memories",
-        json={
-            "ldapId": "question-only-001",
-            "question": "我的名字叫李玉，我喜欢直接给结论。",
-        },
+        json={"ldapId": "question-only-001", "question": "我是李玉，今年35岁"},
     )
     assert response.status_code == 200
     assert response.json()["saved"] >= 1
 
     memories = client.get("/api/dialogue-memories/question-only-001")
     assert memories.status_code == 200
-    assert any("李玉" in item["content"] for item in memories.json())
+    assert "个人记忆汇总" in memories.json()["content"]
+    assert "李玉" in memories.json()["content"] or "35" in memories.json()["content"]
+    assert memories.json()["content"].count("李玉") == 1
 
 
 def test_dialogue_memory_writes_markdown_files(client):
     client.post(
         "/api/dialogue-memories",
-        json={
-            "ldapId": "md001",
-            "question": "remember: I am in finance department and prefer direct conclusions.",
-        },
+        json={"ldapId": "md001", "question": "remember: I am in finance department and prefer direct conclusions."},
     )
     admin_token = token(client, "admin", "admin123")
     markdown = client.get(
@@ -74,29 +72,24 @@ def test_dialogue_memory_writes_markdown_files(client):
 def test_memory_layers_and_admin_crud(client):
     client.post(
         "/api/dialogue-memories",
-        json={
-            "ldapId": "alice001",
-            "question": "我是销售部的李雷，今天临时要准备季度复盘。",
-        },
+        json={"ldapId": "alice001", "question": "I am in sales department. temporary today: prepare quarterly review."},
     )
-    profile = client.get("/api/dialogue-memories/alice001?layer=profile")
+    admin_token = token(client, "admin", "admin123")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    profile = client.get("/api/admin/memories/alice001?layer=profile", headers=headers)
     assert profile.status_code == 200
     assert len(profile.json()) >= 1
 
-    admin_token = token(client, "admin", "admin123")
     memory = profile.json()[0]
     updated = client.patch(
         f"/api/admin/memories/alice001/{memory['id']}",
-        json={"content": "李雷在销售部。", "layer": "profile", "status": "inactive"},
-        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"content": "李玉在销售部。", "layer": "profile", "status": "inactive"},
+        headers=headers,
     )
     assert updated.status_code == 200
     assert updated.json()["status"] == "inactive"
 
-    deleted = client.delete(
-        f"/api/admin/memories/alice001/{memory['id']}",
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
+    deleted = client.delete(f"/api/admin/memories/alice001/{memory['id']}", headers=headers)
     assert deleted.status_code == 200
 
 
@@ -105,15 +98,15 @@ def test_dialogue_memory_accepts_legacy_ai_reply_for_compatibility(client):
         "/api/dialogue-memories",
         json={
             "ldapId": "legacy-ai-reply-001",
-            "question": "记住，我喜欢简洁摘要。",
-            "aiReply": "兼容旧调用方：这个字段仍然允许传入。",
+            "question": "remember: I prefer concise summaries.",
+            "aiReply": "Legacy callers may still send this field.",
         },
     )
     assert response.status_code == 200
     assert response.json()["saved"] >= 1
 
 
-def test_temporary_memories_are_returned_as_single_recent_summary(client):
+def test_temporary_memories_are_returned_as_single_recent_markdown_summary(client):
     for text in [
         "temporary today: focus on the quarterly review deck.",
         "temporary current task: prepare API rollout notes.",
@@ -127,15 +120,11 @@ def test_temporary_memories_are_returned_as_single_recent_summary(client):
     memories = client.get("/api/dialogue-memories/temp-summary-001?layer=temporary")
     assert memories.status_code == 200
     payload = memories.json()
-    assert len(payload) == 1
-    assert payload[0]["memory_type"] == "temporary_summary"
-    assert "quarterly review deck" in payload[0]["content"]
-    assert "API rollout notes" in payload[0]["content"]
-
-    all_memories = client.get("/api/dialogue-memories/temp-summary-001")
-    temporary_items = [item for item in all_memories.json() if item["layer"] == "temporary"]
-    assert len(temporary_items) == 1
-    assert temporary_items[0]["memory_type"] == "temporary_summary"
+    assert payload["ldapId"] == "temp-summary-001"
+    assert "临时记忆" in payload["content"]
+    assert "quarterly review deck" in payload["content"]
+    assert "API rollout notes" in payload["content"]
+    assert "temporary_summary" not in payload["content"]
 
 
 def test_expired_temporary_sources_are_physically_deleted_without_touching_long_term(client):
@@ -176,7 +165,7 @@ def test_expired_temporary_sources_are_physically_deleted_without_touching_long_
 
     response = client.get("/api/dialogue-memories/temp-expire-001?layer=temporary")
     assert response.status_code == 200
-    assert len(response.json()) == 1
+    assert "track launch checklist" in response.json()["content"]
 
     generator, db = open_test_db_session()
     try:
@@ -242,11 +231,7 @@ def test_admin_can_read_and_update_model_config(client):
     assert current.status_code == 200
     assert current.json()["chat_model"] == "qwen-max"
 
-    updated = client.patch(
-        "/api/admin/model-config",
-        json={"chat_model": "qwen-plus"},
-        headers=headers,
-    )
+    updated = client.patch("/api/admin/model-config", json={"chat_model": "qwen-plus"}, headers=headers)
     assert updated.status_code == 200
     assert updated.json()["chat_model"] == "qwen-plus"
 
@@ -338,7 +323,7 @@ def test_personal_memory_api_is_scoped_to_token_ldap_id(client):
 
     created = client.post(
         "/api/personal/memories",
-        json={"content": "alice 私人记忆", "layer": "profile", "memory_type": "manual", "status": "active"},
+        json={"content": "alice private memory", "layer": "profile", "memory_type": "manual", "status": "active"},
         headers=alice_headers,
     )
     assert created.status_code == 200
@@ -350,18 +335,18 @@ def test_personal_memory_api_is_scoped_to_token_ldap_id(client):
 
     bob_update = client.patch(
         f"/api/personal/memories/{memory_id}",
-        json={"content": "bob 不能改 alice 的记忆"},
+        json={"content": "bob cannot update alice memory"},
         headers=bob_headers,
     )
     assert bob_update.status_code == 404
 
     updated = client.patch(
         f"/api/personal/memories/{memory_id}",
-        json={"content": "alice 已更新记忆"},
+        json={"content": "alice updated memory"},
         headers=alice_headers,
     )
     assert updated.status_code == 200
-    assert updated.json()["content"] == "alice 已更新记忆"
+    assert updated.json()["content"] == "alice updated memory"
 
     deleted = client.delete(f"/api/personal/memories/{memory_id}", headers=alice_headers)
     assert deleted.status_code == 200

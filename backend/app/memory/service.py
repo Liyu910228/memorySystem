@@ -211,6 +211,58 @@ def render_layer_markdown(user: User, layer: str, memories: list[Memory]) -> str
     return "\n".join(lines)
 
 
+def compact_memory_contents(memories: list[Memory]) -> list[str]:
+    contents: list[str] = []
+    for memory in memories:
+        content = re.sub(r"\s+", " ", memory.content).strip()
+        content = re.sub(r"^(user|assistant|system):\s*", "", content, flags=re.IGNORECASE)
+        if content:
+            contents.append(content)
+
+    compacted: list[str] = []
+    for content in sorted(set(contents), key=len, reverse=True):
+        if any(content != existing and content in existing for existing in compacted):
+            continue
+        compacted.append(content)
+    return list(reversed(compacted))
+
+
+def render_dialogue_memory_markdown(
+    db: Session,
+    user: User,
+    layer: str | None = None,
+    query: str | None = None,
+) -> str:
+    ldap_id = user.ldap_id or user.username
+    selected_layers = [normalize_layer(layer)] if layer else list(LAYER_FILES)
+    lines = [
+        f"# {ldap_id} 的个人记忆汇总",
+        "",
+        f"- ldapId: `{ldap_id}`",
+        f"- 用户显示名: {user.display_name}",
+        "",
+    ]
+    has_content = False
+    for current_layer in selected_layers:
+        memories = list_memories(db, user.id, query, current_layer)
+        title = LAYER_FILES[current_layer][1]
+        lines.extend([f"## {title}", ""])
+        if not memories:
+            lines.extend(["暂无记忆。", ""])
+            continue
+        contents = compact_memory_contents(memories)
+        if not contents:
+            lines.extend(["暂无记忆。", ""])
+            continue
+        has_content = True
+        for content in contents:
+            lines.append(f"- {content}")
+        lines.append("")
+    if not has_content:
+        lines.append("> 暂无可用记忆。")
+    return "\n".join(lines).strip() + "\n"
+
+
 def sync_user_memory_markdown(db: Session, user: User) -> dict[str, str]:
     export_root = Path(settings.memory_export_dir) / safe_ldap_path(user.ldap_id or user.username)
     export_root.mkdir(parents=True, exist_ok=True)

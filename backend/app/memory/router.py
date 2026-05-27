@@ -8,6 +8,7 @@ from app.memory.service import (
     extract_from_dialogue,
     get_or_create_employee_by_ldap,
     list_memories,
+    render_dialogue_memory_markdown,
     summarize_temporary_memories,
     sync_user_memory_markdown,
     update_user_memory_markdown_file,
@@ -15,7 +16,7 @@ from app.memory.service import (
 from app.shared.database import get_db
 from app.shared.llm import embedding
 from app.shared.models import Memory, MemoryLayer, MemoryStatus, User
-from app.shared.schemas import DialogueMemoryIn, MarkdownUpdate, MemoryCreate, MemoryOut, MemoryUpdate
+from app.shared.schemas import DialogueMemoryIn, DialogueMemoryMarkdownOut, MarkdownUpdate, MemoryCreate, MemoryOut, MemoryUpdate
 
 router = APIRouter(prefix="/memories", tags=["memories"])
 
@@ -90,7 +91,7 @@ async def post_dialogue_memory(payload: DialogueMemoryIn, db: Session = Depends(
     return {"ldapId": user.ldap_id, "saved": saved}
 
 
-@public_router.get("/{ldap_id}", response_model=list[MemoryOut])
+@public_router.get("/{ldap_id}", response_model=DialogueMemoryMarkdownOut)
 def get_dialogue_memories(
     ldap_id: str,
     layer: str | None = None,
@@ -99,8 +100,11 @@ def get_dialogue_memories(
 ):
     user = db.scalar(select(User).where(User.ldap_id == ldap_id))
     if not user:
-        return []
-    return list_memories(db, user.id, q, layer)
+        return {"ldapId": ldap_id, "content": ""}
+    return {
+        "ldapId": user.ldap_id or ldap_id,
+        "content": render_dialogue_memory_markdown(db, user, layer, q),
+    }
 
 
 admin_router = APIRouter(prefix="/admin/memories", tags=["admin-memories"])
