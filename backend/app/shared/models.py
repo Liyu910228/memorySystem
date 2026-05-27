@@ -6,6 +6,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.shared.database import Base
 
+TABLE_PREFIX = "memory_system_"
+
+
+def table_name(name: str) -> str:
+    return f"{TABLE_PREFIX}{name}"
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -39,7 +45,7 @@ class ModelProtocol(str, Enum):
 
 
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = table_name("users")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
@@ -54,25 +60,25 @@ class User(Base):
 
 
 class Thread(Base):
-    __tablename__ = "threads"
+    __tablename__ = table_name("threads")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(f"{User.__tablename__}.id"), index=True)
     title: Mapped[str] = mapped_column(String(160), default="超级对话")
     is_main: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     user: Mapped[User] = relationship(back_populates="threads")
     sessions: Mapped[list["ChatSession"]] = relationship(back_populates="thread")
-    __table_args__ = (UniqueConstraint("user_id", "is_main", name="uq_user_main_thread"),)
+    __table_args__ = (UniqueConstraint("user_id", "is_main", name="uq_memory_system_user_main_thread"),)
 
 
 class ChatSession(Base):
-    __tablename__ = "sessions"
+    __tablename__ = table_name("sessions")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    thread_id: Mapped[int] = mapped_column(ForeignKey("threads.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(f"{User.__tablename__}.id"), index=True)
+    thread_id: Mapped[int] = mapped_column(ForeignKey(f"{Thread.__tablename__}.id"), index=True)
     title: Mapped[str] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
@@ -81,11 +87,11 @@ class ChatSession(Base):
 
 
 class Message(Base):
-    __tablename__ = "messages"
+    __tablename__ = table_name("messages")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(f"{User.__tablename__}.id"), index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey(f"{ChatSession.__tablename__}.id"), index=True)
     role: Mapped[str] = mapped_column(String(30))
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -94,11 +100,11 @@ class Message(Base):
 
 
 class Memory(Base):
-    __tablename__ = "memories"
+    __tablename__ = table_name("memories")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    source_session_id: Mapped[int | None] = mapped_column(ForeignKey("sessions.id"), nullable=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(f"{User.__tablename__}.id"), index=True)
+    source_session_id: Mapped[int | None] = mapped_column(ForeignKey(f"{ChatSession.__tablename__}.id"), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     layer: Mapped[str] = mapped_column(String(40), default=MemoryLayer.long_term.value, index=True)
     memory_type: Mapped[str] = mapped_column(String(60), default="preference")
@@ -110,7 +116,7 @@ class Memory(Base):
 
 
 class JobRun(Base):
-    __tablename__ = "job_runs"
+    __tablename__ = table_name("job_runs")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_type: Mapped[str] = mapped_column(String(80))
@@ -121,10 +127,10 @@ class JobRun(Base):
 
 
 class AuditLog(Base):
-    __tablename__ = "audit_logs"
+    __tablename__ = table_name("audit_logs")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey(f"{User.__tablename__}.id"), nullable=True)
     action: Mapped[str] = mapped_column(String(120))
     target_type: Mapped[str] = mapped_column(String(80))
     target_id: Mapped[str] = mapped_column(String(80))
@@ -133,7 +139,7 @@ class AuditLog(Base):
 
 
 class ModelProvider(Base):
-    __tablename__ = "model_providers"
+    __tablename__ = table_name("model_providers")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)

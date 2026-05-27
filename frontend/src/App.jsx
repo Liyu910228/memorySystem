@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowRight, Brain, CheckCircle2, Database, Edit3, Eye, EyeOff, FileText, FlaskConical, KeyRound, LayoutDashboard, LogOut, MessageSquare, Plus, RefreshCw, Save, Send, Settings, Sparkles, Trash2, XCircle } from 'lucide-react';
+import { ArrowRight, Brain, CheckCircle2, Clipboard, Database, Edit3, Eye, EyeOff, FileText, FlaskConical, KeyRound, LayoutDashboard, LogOut, MessageSquare, Plus, RefreshCw, Save, Send, Settings, Sparkles, Trash2, XCircle } from 'lucide-react';
 import './styles.css';
 import loginReference from './assets/login-reference.jpeg';
 
@@ -56,6 +56,75 @@ const sections = [
   },
 ];
 const personalSections = sections.filter(section => ['read', 'edit'].includes(section.key));
+const apiDocs = [
+  {
+    title: '写入并抽取个人记忆',
+    badge: 'POST',
+    path: '/api/dialogue-memories',
+    description: '业务系统把员工 ldapId 和用户原始问题传入，服务会自动抽取可长期保存的个人记忆。',
+    request: `curl --location --request POST '[origin]/api/dialogue-memories' \\
+--header 'Content-Type: application/json' \\
+--data-raw '{
+  "ldapId": "alice001",
+  "displayName": "Alice",
+  "question": "记住，我喜欢先看结论，再看详细分析。"
+}'`,
+    params: [
+      ['ldapId', 'string', '必填，员工 LDAP ID，也是个人记忆隔离键。'],
+      ['question', 'string', '必填，用户本次输入或需要抽取的原始文本。'],
+      ['displayName', 'string', '可选，首次创建员工记录时用于展示名称。'],
+      ['aiReply', 'string', '可选，兼容旧调用方；当前抽取以 question 为主。'],
+    ],
+    response: `{
+  "ldapId": "alice001",
+  "saved": 2
+}`,
+  },
+  {
+    title: '读取员工全部或分层记忆',
+    badge: 'GET',
+    path: '/api/dialogue-memories/{ldapId}',
+    description: '业务系统按 ldapId 拉取员工已沉淀的个人记忆，可选 layer 只读取某一层。',
+    request: `curl --location --request GET '[origin]/api/dialogue-memories/alice001?layer=long_term'`,
+    params: [
+      ['ldapId', 'path', '必填，员工 LDAP ID。'],
+      ['layer', 'query', '可选：profile / long_term / temporary。'],
+      ['q', 'query', '可选，按记忆内容关键字模糊检索。'],
+    ],
+    response: `[
+  {
+    "id": 18,
+    "ldap_id": "alice001",
+    "content": "该员工喜欢先看结论，再看详细分析。",
+    "layer": "long_term",
+    "memory_type": "preference",
+    "status": "active",
+    "confidence": 0.85
+  }
+]`,
+  },
+  {
+    title: '个人 token 访问与编辑',
+    badge: 'TOKEN',
+    path: '/?token=<jwt>',
+    description: '个人访问链接会从 JWT audience 识别本人 ldapId；个人 API 调用时在请求头传 token。',
+    request: `curl --location --request GET '[origin]/api/personal/memories?layer=profile' \\
+--header 'token: [jwt-token]'`,
+    params: [
+      ['token', 'header/url', '必填，JWT 的 audience[0] 应为员工 ldapId。'],
+      ['layer', 'query', '可选：profile / long_term / temporary。'],
+      ['content', 'body', '个人新增或编辑记忆时传入。'],
+    ],
+    response: `[
+  {
+    "id": 9,
+    "content": "本人偏好中文简洁摘要。",
+    "layer": "profile",
+    "status": "active"
+  }
+]`,
+  },
+];
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('adminToken');
@@ -536,6 +605,85 @@ function MarkdownViewer({ markdown, canEdit, onSave }) {
   );
 }
 
+function ApiDocCard({ doc, origin }) {
+  const [activeTab, setActiveTab] = useState('request');
+  const [copied, setCopied] = useState(false);
+  const requestText = doc.request.replaceAll('[origin]', origin);
+
+  async function copyRequest() {
+    try {
+      await navigator.clipboard.writeText(requestText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <article className="api-doc-card">
+      <div className="api-doc-head">
+        <div>
+          <span className={`api-method api-method-${doc.badge.toLowerCase()}`}>{doc.badge}</span>
+          <h3>{doc.title}</h3>
+          <p>{doc.description}</p>
+        </div>
+        <code>{doc.path}</code>
+      </div>
+      <div className="api-tabs">
+        <button type="button" className={activeTab === 'request' ? 'active' : ''} onClick={() => setActiveTab('request')}>请求示例</button>
+        <button type="button" className={activeTab === 'params' ? 'active' : ''} onClick={() => setActiveTab('params')}>参数说明</button>
+        <button type="button" className={activeTab === 'response' ? 'active' : ''} onClick={() => setActiveTab('response')}>响应示例</button>
+      </div>
+      {activeTab === 'request' && (
+        <div className="api-code-wrap">
+          <button type="button" onClick={copyRequest} aria-label="复制请求示例"><Clipboard size={16} />{copied ? '已复制' : '复制'}</button>
+          <pre><code>{requestText}</code></pre>
+        </div>
+      )}
+      {activeTab === 'params' && (
+        <div className="api-param-table">
+          {doc.params.map(([name, type, desc]) => (
+            <div key={name}>
+              <code>{name}</code>
+              <span>{type}</span>
+              <p>{desc}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {activeTab === 'response' && (
+        <div className="api-code-wrap response-code">
+          <pre><code>{doc.response}</code></pre>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function OverviewDocs({ onOpenIngest, onOpenRead }) {
+  const origin = window.location.origin || 'http://119.45.222.120:10012';
+
+  return (
+    <section className="api-overview">
+      <div className="api-overview-title">
+        <div>
+          <span>HTTP 调用说明</span>
+          <h2>业务系统接入个人记忆服务</h2>
+          <p>最小接入只需要两个接口：写入时传 `ldapId + question`，读取时按 `ldapId` 拉取可用记忆。</p>
+        </div>
+        <div className="api-overview-actions">
+          <button type="button" onClick={onOpenIngest}><MessageSquare size={16} />在线试写</button>
+          <button type="button" onClick={onOpenRead}><Database size={16} />在线读取</button>
+        </div>
+      </div>
+      <div className="api-doc-list">
+        {apiDocs.map(doc => <ApiDocCard key={doc.title} doc={doc} origin={origin} />)}
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const initialPersonalToken = new URLSearchParams(window.location.search).get('token') || '';
   const [admin, setAdmin] = useState(null);
@@ -747,6 +895,13 @@ function App() {
         )}
 
       <section className="content-shell">
+        {!isPersonalMode && activeSection === 'overview' && (
+          <OverviewDocs
+            onOpenIngest={() => setActiveSection('ingest')}
+            onOpenRead={() => setActiveSection('read')}
+          />
+        )}
+
         {!isPersonalMode && activeSection === 'ingest' && (
         <div className="panel">
           <h1>HTTP 记忆抽取</h1>

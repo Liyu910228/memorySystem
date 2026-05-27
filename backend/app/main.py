@@ -64,6 +64,7 @@ def health():
     return {
         "status": "ok",
         "environment": settings.environment,
+        "database": engine.dialect.name,
         "model_configured": bool(get_runtime_model_config().api_key),
     }
 

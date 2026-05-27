@@ -1,3 +1,8 @@
+from datetime import datetime, timedelta, timezone
+
+from app.main import app
+from app.shared.database import get_db
+from app.shared.models import Memory, MemoryLayer, MemoryStatus, User
 from tests.conftest import token
 from jose import jwt
 
@@ -5,6 +10,12 @@ from jose import jwt
 def external_token(ldap_id: str, audience_field: str = "aud") -> str:
     payload = {audience_field: ldap_id} if audience_field else {"sub": ldap_id}
     return jwt.encode(payload, "external-secret", algorithm="HS256")
+
+
+def open_test_db_session():
+    override = app.dependency_overrides[get_db]
+    generator = override()
+    return generator, next(generator)
 
 
 def test_dialogue_memory_isolated_by_ldap_id(client):
@@ -100,6 +111,116 @@ def test_dialogue_memory_accepts_legacy_ai_reply_for_compatibility(client):
     )
     assert response.status_code == 200
     assert response.json()["saved"] >= 1
+
+
+def test_temporary_memories_are_returned_as_single_recent_summary(client):
+    for text in [
+        "temporary today: focus on the quarterly review deck.",
+        "temporary current task: prepare API rollout notes.",
+    ]:
+        response = client.post(
+            "/api/dialogue-memories",
+            json={"ldapId": "temp-summary-001", "question": text},
+        )
+        assert response.status_code == 200
+
+    memories = client.get("/api/dialogue-memories/temp-summary-001?layer=temporary")
+    assert memories.status_code == 200
+    payload = memories.json()
+    assert len(payload) == 1
+    assert payload[0]["memory_type"] == "temporary_summary"
+    assert "quarterly review deck" in payload[0]["content"]
+    assert "API rollout notes" in payload[0]["content"]
+
+    all_memories = client.get("/api/dialogue-memories/temp-summary-001")
+    temporary_items = [item for item in all_memories.json() if item["layer"] == "temporary"]
+    assert len(temporary_items) == 1
+    assert temporary_items[0]["memory_type"] == "temporary_summary"
+
+
+def test_expired_temporary_sources_are_physically_deleted_without_touching_long_term(client):
+    client.post(
+        "/api/dialogue-memories",
+        json={"ldapId": "temp-expire-001", "question": "temporary today: track launch checklist."},
+    )
+    old_time = datetime.now(timezone.utc) - timedelta(days=6)
+    generator, db = open_test_db_session()
+    try:
+        user = db.query(User).filter(User.ldap_id == "temp-expire-001").one()
+        expired = Memory(
+            user_id=user.id,
+            content="temporary old task that should be deleted",
+            layer=MemoryLayer.temporary.value,
+            memory_type="context",
+            status=MemoryStatus.active.value,
+            confidence=0.8,
+            created_at=old_time,
+            updated_at=old_time,
+        )
+        old_long_term = Memory(
+            user_id=user.id,
+            content="old long term memory must stay",
+            layer=MemoryLayer.long_term.value,
+            memory_type="preference",
+            status=MemoryStatus.active.value,
+            confidence=0.8,
+            created_at=old_time,
+            updated_at=old_time,
+        )
+        db.add_all([expired, old_long_term])
+        db.commit()
+        expired_id = expired.id
+        old_long_term_id = old_long_term.id
+    finally:
+        generator.close()
+
+    response = client.get("/api/dialogue-memories/temp-expire-001?layer=temporary")
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+
+    generator, db = open_test_db_session()
+    try:
+        assert db.get(Memory, expired_id) is None
+        assert db.get(Memory, old_long_term_id) is not None
+    finally:
+        generator.close()
+
+
+def test_temporary_markdown_contains_summary_without_expired_sources(client):
+    client.post(
+        "/api/dialogue-memories",
+        json={"ldapId": "temp-md-001", "question": "temporary today: review supplier risk."},
+    )
+    old_time = datetime.now(timezone.utc) - timedelta(days=6)
+    generator, db = open_test_db_session()
+    try:
+        user = db.query(User).filter(User.ldap_id == "temp-md-001").one()
+        db.add(
+            Memory(
+                user_id=user.id,
+                content="temporary expired supplier item",
+                layer=MemoryLayer.temporary.value,
+                memory_type="context",
+                status=MemoryStatus.active.value,
+                confidence=0.8,
+                created_at=old_time,
+                updated_at=old_time,
+            )
+        )
+        db.commit()
+    finally:
+        generator.close()
+
+    admin_token = token(client, "admin", "admin123")
+    markdown = client.get(
+        "/api/admin/memories/temp-md-001/markdown",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert markdown.status_code == 200
+    temporary = markdown.json()["temporary"]["content"]
+    assert "temporary_summary" in temporary
+    assert "review supplier risk" in temporary
+    assert "expired supplier item" not in temporary
 
 
 def test_admin_can_create_ldap_user_without_employee_password(client):

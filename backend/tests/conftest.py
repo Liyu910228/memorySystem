@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["OPENAI_API_KEY"] = ""
-os.environ["MEMORY_EXPORT_DIR"] = "D:/liyucode/memorySystem/backend/test-data/memories"
+os.environ["MEMORY_EXPORT_DIR"] = "D:/liyucode/memorySystem/backend/tmp-test-memories"
 
 from app.main import app
 from app.shared.database import Base, get_db
