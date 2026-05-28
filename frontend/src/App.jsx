@@ -118,6 +118,59 @@ const apiDocs = [
 ]`,
   },
 ];
+const extractionPrompt = `从以下员工输入中抽取个人记忆。只返回 JSON 数组，
+每项包含 content、layer、memory_type、confidence。不要返回解释文字。
+如果一句话里同时包含姓名、部门、偏好、当前任务等多个事实，必须拆成多条记忆，不要合并或遗漏。
+content 必须保留关键实体原文，例如姓名、部门、岗位、偏好对象。
+layer 只能是 profile、long_term、temporary。
+profile 用于姓名、岗位、部门、联系方式等个人基本信息；
+long_term 用于长期偏好、工作习惯、稳定背景；
+temporary 用于短期上下文、当前任务、阶段性状态。`;
+const memoryLayerGuide = [
+  {
+    layer: 'profile',
+    name: '个人基本信息',
+    summary: '姓名、年龄、岗位、部门、联系方式等稳定身份信息。',
+    example: '我是李玉，今年35岁',
+  },
+  {
+    layer: 'long_term',
+    name: '长期记忆',
+    summary: '长期偏好、工作习惯、稳定背景，后续对话长期有用。',
+    example: '我喜欢先看结论',
+  },
+  {
+    layer: 'temporary',
+    name: '短期记忆',
+    summary: '当前任务、近期关注事项、阶段性上下文；系统只保留最近 5 天汇总。',
+    example: '今天临时要准备月度复盘',
+  },
+];
+const extractionExampleInput = '我是李玉，今年35岁，我喜欢先看结论，今天临时要准备月度复盘。';
+const extractionExampleJson = `[
+  {
+    "content": "我是李玉，今年35岁",
+    "layer": "profile",
+    "memory_type": "profile",
+    "confidence": 0.95
+  },
+  {
+    "content": "我喜欢先看结论",
+    "layer": "long_term",
+    "memory_type": "preference",
+    "confidence": 0.9
+  },
+  {
+    "content": "今天临时要准备月度复盘",
+    "layer": "temporary",
+    "memory_type": "context",
+    "confidence": 0.85
+  }
+]`;
+const extractionExampleOutput = `{
+  "ldapId": "liyu",
+  "content": "个人基本信息：我是李玉，今年35岁；长期记忆：我喜欢先看结论；临时记忆：最近 5 天关注：今天临时要准备月度复盘；"
+}`;
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('adminToken');
@@ -654,6 +707,65 @@ function ApiDocCard({ doc, origin }) {
   );
 }
 
+function MemoryExtractionGuide() {
+  return (
+    <section className="extraction-guide">
+      <div className="extraction-guide-head">
+        <div>
+          <span>大模型抽取逻辑</span>
+          <h2>记忆是怎么从一句话里抽出来的</h2>
+          <p>业务系统只要传入员工 ldapId 和用户原始输入，系统会让大模型按规则拆出个人信息、长期记忆和短期记忆，最后读取时返回一段可直接给业务使用的简洁汇总。</p>
+        </div>
+      </div>
+
+      <div className="extraction-flow">
+        <div><strong>1</strong><span>业务传入</span><p><code>ldapId + question</code></p></div>
+        <div><strong>2</strong><span>模型识别</span><p>按提示词抽取结构化 JSON</p></div>
+        <div><strong>3</strong><span>分层保存</span><p>写入个人信息、长期、短期三层记忆</p></div>
+        <div><strong>4</strong><span>汇总读取</span><p>返回简短清晰的 content 文本</p></div>
+      </div>
+
+      <div className="memory-layer-guide">
+        {memoryLayerGuide.map(item => (
+          <article key={item.layer}>
+            <code>{item.layer}</code>
+            <h3>{item.name}</h3>
+            <p>{item.summary}</p>
+            <span>{item.example}</span>
+          </article>
+        ))}
+      </div>
+
+      <div className="extraction-detail-grid">
+        <article className="prompt-panel">
+          <div className="section-eyebrow">当前真实提示词</div>
+          <pre><code>{extractionPrompt}</code></pre>
+        </article>
+        <article className="example-panel">
+          <div className="section-eyebrow">业务例子</div>
+          <div className="example-step">
+            <strong>用户输入</strong>
+            <p>{extractionExampleInput}</p>
+          </div>
+          <div className="example-step">
+            <strong>模型抽取</strong>
+            <pre><code>{extractionExampleJson}</code></pre>
+          </div>
+          <div className="example-step">
+            <strong>读取返回</strong>
+            <pre><code>{extractionExampleOutput}</code></pre>
+          </div>
+        </article>
+      </div>
+
+      <div className="business-rules">
+        <strong>给业务同学的判断口诀</strong>
+        <p>描述“这个人是谁、喜欢什么、正在做什么”的内容可以保存；像“我是谁”“我叫什么”这种只是提问，不会保存为记忆。</p>
+      </div>
+    </section>
+  );
+}
+
 function OverviewDocs({ onOpenIngest, onOpenRead }) {
   const origin = window.location.origin || 'http://119.45.222.120:10012';
 
@@ -671,6 +783,7 @@ function OverviewDocs({ onOpenIngest, onOpenRead }) {
         </div>
       </div>
       <div className="api-doc-list">
+        <MemoryExtractionGuide />
         {apiDocs.map(doc => <ApiDocCard key={doc.title} doc={doc} origin={origin} />)}
       </div>
     </section>

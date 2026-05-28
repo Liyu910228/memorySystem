@@ -27,6 +27,7 @@
 - Target MySQL schema: `ctp_rbac.memory_system_*`.
 - Public write API: `POST /api/dialogue-memories`.
 - Public read API: `GET /api/dialogue-memories/{ldapId}`.
+- Business guide: `docs/MEMORY_EXTRACTION_BUSINESS_GUIDE.md`.
 - Default extraction model: `qwen-max`.
 - Admin model setting API: `GET/PATCH /api/admin/model-config`.
 - Markdown mirrors: `backend/data/memories/{ldapId}/profile.md`, `long_term.md`, `temporary.md`.
